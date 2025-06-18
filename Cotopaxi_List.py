@@ -7,26 +7,23 @@ from docx.shared import Pt
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# 1) authorize with Google Sheets
 scope = [
-    'https://spreadsheets.google.com/feeds',
-    'https://www.googleapis.com/auth/drive'
-]
+    'https://www.googleapis.com/auth/spreadsheets.readonly',
+    'https://www.googleapis.com/auth/drive.metadata.readonly'
+] #readonly scope :) 
+
 creds  = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
 client = gspread.authorize(creds)
 
-# 2) open sheet
+
 sheet = client.open('Cotopaxi Media Report - 2025').worksheet('ONLINE')
 values = sheet.get_all_values()
 rows   = values[1:]  # skip header
 
-# 3) load into DataFrame (positional columns)
 df = pd.DataFrame(rows)
 
-# 4) parse dates (column E → index 4)
 df[4] = pd.to_datetime(df[4], errors='coerce')
 
-# 5) row-by-row Impressions parser
 def parse_impr(row):
     for idx in (5, 6):        # F or G
         val = row[idx].replace(',', '').strip()
@@ -36,7 +33,6 @@ def parse_impr(row):
 
 df['Impressions'] = df.apply(parse_impr, axis=1)
 
-# 6) categorize (I/J → idx 8/9)
 def get_category(r):
     if r[8]=='P' and r[9]=='A': return 'APPAREL FEATURES'
     if r[8]=='P' and r[9]=='P': return 'PACKS & BAG FEATURES'
@@ -45,7 +41,7 @@ def get_category(r):
 
 df['Category'] = df.apply(get_category, axis=1)
 
-# 7) define Thu→Wed window
+# thurs to wednesday time frame, run once/week to update locally
 today        = dt.date.today()
 delta_to_wed = (2 - today.weekday()) % 7  # Wed=2
 end_date     = today + dt.timedelta(days=delta_to_wed)
@@ -54,11 +50,10 @@ start_date   = end_date - dt.timedelta(days=6)
 mask    = df[4].dt.date.between(start_date, end_date)
 week_df = df.loc[mask].sort_values([ 'Category', 4 ], ascending=[True, True])
 
-# 8) totals
+
 total_impr = week_df['Impressions'].sum()
 total_hits = len(week_df)
 
-# 9) build Word doc
 def add_hyperlink(p, url, text):
     part = p.part
     r_id = part.relate_to(
@@ -77,14 +72,14 @@ def add_hyperlink(p, url, text):
 doc = Document()
 doc.styles['Normal'].font.name = 'Calibri'; doc.styles['Normal'].font.size = Pt(11)
 
-# Header
+# categories
 h = doc.add_paragraph()
 h.add_run(f"Date Range: {start_date:%B %d, %Y} - {end_date:%B %d, %Y}").bold = True
 doc.add_paragraph(f"Total Impressions: {total_impr:,}")
 doc.add_paragraph(f"Total Hits: {total_hits}")
 doc.add_paragraph("")
 
-# Sections
+# organisation
 for sec in ['APPAREL FEATURES','PACKS & BAG FEATURES','BRAND/SUSTAINABILITY']:
     sub = week_df[week_df['Category']==sec]
     if sub.empty: continue
@@ -100,7 +95,7 @@ for sec in ['APPAREL FEATURES','PACKS & BAG FEATURES','BRAND/SUSTAINABILITY']:
         add_hyperlink(para, url, headline)
         para.add_run(f" - {imp:,} Impressions")
 
-# Save
+#output!
 output = 'cotopaxi_weekly_hits.docx'
 doc.save(output)
 print("Generated:", output)
